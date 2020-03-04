@@ -1,0 +1,654 @@
+#!/usr/bin/env python
+"""mock rerobots API
+
+    ./rmock --help
+
+
+SCL <scott@rerobots.net>
+Copyright (C) 2019 rerobots, Inc.
+"""
+import argparse
+import asyncio
+import hashlib
+import math
+import os.path
+import random
+import sys
+import time
+import uuid
+from datetime import datetime
+
+import aiohttp
+from aiohttp import web
+
+import jwt
+
+
+@web.middleware
+async def cors_handler(request, handler):
+    """Middleware to add CORS response headers
+    """
+    response = await handler(request)
+    response.headers['Access-Control-Allow-Origin'] = 'http://127.0.0.1:8000'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
+
+
+def get_user(headers):
+    """Extract username if JWT given.
+
+    The integrity of the token is not checked because this is a mock!
+    """
+    if 'Authorization' in headers:
+        tok = headers['Authorization'].split()[1]
+        payload = jwt.decode(tok, verify=False)
+        return payload['sub']
+    return None
+
+
+def create_rmock(argv=None):
+    """Parse CLI args, and return Web app.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+
+    argparser = argparse.ArgumentParser(
+        description='mock rerobots API',
+        epilog=('WARNING: This mock does not yet comprehensively implement the rerobots API. '
+                'If a request is not recognized by this mock (but possibly part of the '
+                'rerobots API), then the verb and path are printed to the terminal.'))
+    argparser.add_argument('-v', '--verbose', dest='verbose',
+                           action='store_true', default=False,
+                           help=('print details for each request, '
+                                 'independently of whether it is implemented; '
+                                 'default behavior is to print verb and path only '
+                                 'where not implemented'))
+    argparser.add_argument('--show-headers', dest='show_headers',
+                           action='store_true', default=False,
+                           help='show headers of requests')
+    argparser.add_argument('--show-text', dest='show_text',
+                           action='store_true', default=False,
+                           help='show text body of requests')
+    argparser.add_argument('-n', dest='number_of_wds', metavar='N', type=int, default=1,
+                           help='the number of workspace deployments; default is 1, if N is not given.')
+    argparser.add_argument('-t', dest='assumed_wtype', metavar='TYPE', type=str, default='null',
+                           help='workspace type; default is `null`')
+    argparser.add_argument('--wdid', dest='fixed_wdeployment_id', metavar='ID', type=str, default=None,
+                           help=('workspace deployment id; if more than 1, comma-separated; '
+                                 'default is to randomly generate as needed'))
+    args = argparser.parse_args(argv)
+    if args.number_of_wds <= 0:
+        print('number of workspace deployments must be positive integer.')
+        sys.exit(1)
+    if args.fixed_wdeployment_id is not None:
+        wdeployment_ids = list(set(args.fixed_wdeployment_id.split(',')))
+        if args.number_of_wds != len(wdeployment_ids):
+            print('values of -n and --wdid not consistent')
+            sys.exit(1)
+    else:
+        wdeployment_ids = [str(uuid.uuid4()) for k in range(args.number_of_wds)]
+
+    app = web.Application(middlewares=[cors_handler])
+    app['show_headers'] = args.show_headers
+    app['show_text'] = args.show_text
+    app['verbose'] = args.verbose
+    app['state'] = {
+        'assumed_wtype': args.assumed_wtype,
+        'instances': dict(),
+        'wds': {wdid: None for wdid in wdeployment_ids},
+        'example_data': {
+            'webcam': open(os.path.join('data', 'webcam.txt'), 'rt').read().strip(),
+        },
+    }
+
+    app.router.add_get(r'/workspaces', list_workspaces, allow_head=False)
+    app.router.add_get(r'/instances', list_instances, allow_head=False)
+    app.router.add_get(r'/instances/{wt:[a-zA-Z\d_\-]+}', list_instances, allow_head=False)
+    app.router.add_get(r'/instance/{inid:[a-zA-Z\d_\-0-9\=]+}', get_instance_info, allow_head=False)
+    app.router.add_get(r'/firewall/{inid:[a-zA-Z\d_\-0-9\=]+}', get_firewall_rules, allow_head=False)
+    app.router.add_post(r'/terminate/{inid:[a-zA-Z\d_\-0-9\=]+}', terminate_instance)
+    app.router.add_get(r'/reservations', list_reservations, allow_head=False)
+    app.router.add_get(r'/deployments', list_wdeployments, allow_head=False)
+    app.router.add_get(r'/deployments/{wt:[a-zA-Z\d_\-]+}', list_wdeployments, allow_head=False)
+    app.router.add_post(r'/new/{wdid:[a-zA-Z\d_\-0-9\=]+}', launch_instance)
+    app.router.add_get(r'/deployment/{wdid:[a-zA-Z\d_\-0-9\=]+}', get_wdinfo, allow_head=False)
+    app.router.add_get(r'/rules', get_acl, allow_head=False)
+    app.router.add_post(r'/revoke/{sha256:[a-fA-F0-9]{64}}', revoke_token)
+    app.router.add_post(r'/purge', purge_tokens)
+
+    app.router.add_get(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}', status_addon_cam, allow_head=False)
+    app.router.add_post(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}', apply_addon_cam)
+    app.router.add_delete(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}', remove_addon_cam)
+    app.router.add_get(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}/{cameraid:[0-9]+}/img', addon_cam_snapshot, allow_head=False)
+    app.router.add_get(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}/{cameraid:[0-9]+}/feed/{tok:[a-zA-Z_\-0-9\=]+}', addon_cam_stream, allow_head=False)
+
+    app.router.add_get(r'/addon/mistyproxy/{inid:[a-zA-Z\d_\-0-9\=]+}', status_addon_mistyproxy, allow_head=False)
+    app.router.add_post(r'/addon/mistyproxy/{inid:[a-zA-Z\d_\-0-9\=]+}', apply_addon_mistyproxy)
+    app.router.add_delete(r'/addon/mistyproxy/{inid:[a-zA-Z\d_\-0-9\=]+}', remove_addon_mistyproxy)
+
+    app.router.add_get(r'/addon/py/{inid:[a-zA-Z\d_\-0-9\=]+}', status_addon_py, allow_head=False)
+    app.router.add_post(r'/addon/py/{inid:[a-zA-Z\d_\-0-9\=]+}', apply_addon_py)
+    app.router.add_delete(r'/addon/py/{inid:[a-zA-Z\d_\-0-9\=]+}', remove_addon_py)
+
+    app.router.add_options(r'/{route:.+}', show_options)
+
+    app.router.add_route('*', r'/{route:.+}', unknown)
+
+    return app
+
+
+async def print_details(request):
+    """Print to stdout details of request.
+    """
+    if request.app['show_text']:
+        btext = await request.text()
+    if request.app['show_headers'] or (request.app['show_text'] and len(btext) > 0):
+        print('---')
+    if request.app['show_headers']:
+        print(dict(request.headers))
+    print('{} {}'.format(request.method, request.path))
+    if request.app['show_text'] and len(btext) > 0:
+        print(btext)
+
+
+async def list_workspaces(request):
+    """GET /workspaces
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    return web.json_response({'workspace_types': [request.app['state']['assumed_wtype']]})
+
+
+async def show_options(request):
+    """OPTIONS to support CORS
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    return web.Response(headers={'Access-Control-Allow-Headers': 'Authorization,Content-Type'})
+
+
+async def list_instances(request):
+    """GET /instances
+    """
+    user = get_user(request.headers)
+    if request.app['verbose']:
+        await print_details(request)
+        if user:
+            print('username:', user)
+    include_terminated = ('include_terminated' in request.query)
+    if 'wt' in request.match_info:
+        constrained_wtype = request.match_info['wt']
+    else:
+        constrained_wtype = False
+    instances = []
+    for (inid, info) in request.app['state']['instances'].items():
+        if user and info['user'] != user:
+            continue
+        if (not include_terminated) and info['status'] == 'TERMINATED':
+            continue
+        if not constrained_wtype or request.app['state']['assumed_wtype'] == constrained_wtype:
+            instances.append(inid)
+    return web.json_response({
+        'workspace_instances': instances,
+        'page_count': 1
+    })
+
+
+async def list_reservations(request):
+    """GET /reservations
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    return web.json_response({
+        'reservations': [],
+    })
+
+
+def extract_query_int(query, name, minv=None, maxv=None, default=None, clip=True):
+    """Extract value from query parameters as type int.
+
+    If clip (default), then values outside the range of [minv, maxv]
+    (assuming minv or maxv is non-None) are assigned the most near
+    boundary value. E.g., if the value is less than minv, and if
+    clip=True, then minv is returned.
+
+    If clip is False, then raise ValueError when value is outside range.
+
+    If the parameter value is not well formed, ValueError is raised.
+    """
+    val = None
+    if name in query:
+        val = int(query[name])
+        if (minv is not None) and val < minv:
+            if clip:
+                val = minv
+            else:
+                raise ValueError('query parameter is less than minimum feasible value')
+        if (maxv is not None) and val > maxv:
+            if clip:
+                val = maxv
+            else:
+                raise ValueError('query parameter is greater than maximum feasible value')
+    elif default is not None:
+        val = default
+    return val
+
+
+async def list_wdeployments(request):
+    """GET /deployments
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if 'wt' in request.match_info:
+        types = [request.match_info['wt']]
+    else:
+        types = []
+    try:
+        max_per_page = extract_query_int(request.query, 'max_per_page', minv=0, default=0, clip=True)
+    except ValueError:
+        return web.json_response({'error_message': 'error parsing given value of max_per_page'}, status=400)
+    try:
+        page = extract_query_int(request.query, 'page', minv=1, default=1, clip=True)
+    except ValueError:
+        return web.json_response({'error_message': 'error parsing given value of page'}, status=400)
+    if ('maxlen' not in request.query) or request.query['maxlen'] == 'u':
+        maxlen = 'u'
+    else:
+        try:
+            maxlen = extract_query_int(request.query, 'maxlen', minv=0, clip=True)
+        except ValueError:
+            return web.json_response({'error_message': 'error parsing given value of maxlen'}, status=400)
+
+    matches = []
+    if 'q' not in request.query or request.app['state']['assumed_wtype'].find(request.query['q']) >= 0:
+        if len(types) == 0 or request.app['state']['assumed_wtype'] in types:
+            for wdeployment in request.app['state']['wds'].keys():
+                if maxlen == 'u' or request.app['state']['wds'][wdeployment] is None or maxlen >= 1:
+                    matches.append(wdeployment)
+
+    if max_per_page == 0:
+        page_count = 1
+    else:
+        page_count = math.ceil(len(matches)/max_per_page)
+    if page > page_count:
+        page = page_count
+
+    if max_per_page > 0:
+        matches = matches[(page-1)*max_per_page:page*max_per_page]
+
+    return web.json_response({
+        'workspace_deployments': matches,
+        'page_count': page_count,
+    })
+
+
+async def get_wdinfo(request):
+    """GET /deployment/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    wdid = request.match_info['wdid']
+    if wdid not in request.app['state']['wds']:
+        return web.json_response({'error_message': 'no workspace deployment found with given ID'},
+                                 status=404)
+    return web.json_response({
+        'id': wdid,
+        'type': request.app['state']['assumed_wtype'],
+        'type_version': 1,
+        'supported_addons': ['cam', 'mistyproxy', 'py'],
+        'desc': '',
+        'region': 'us:cali',
+        'icounter': 1,
+        'created': '2019-06-25 07:21:48.223695',
+        'queuelen': 0 if request.app['state']['wds'][wdid] is None else 1,
+    })
+
+
+async def launch_instance(request):
+    """POST /new/<id>
+    """
+    user = get_user(request.headers)
+    if request.app['verbose']:
+        await print_details(request)
+        if user:
+            print('username:', user)
+    wdid = request.match_info['wdid']
+    if wdid not in request.app['state']['wds']:
+        return web.json_response({'error_message': 'no workspace deployment found with given ID'},
+                                 status=404)
+    if request.app['state']['wds'][wdid] is None:
+        instance_id = str(uuid.uuid4())
+        request.app['state']['instances'][instance_id] = {
+            'start_time': str(datetime.utcnow()),
+            'status': 'INIT',
+            'tdiff': time.monotonic(),
+            'wd': wdid,
+            'addon_mistyproxy': None,
+            'addon_py': None,
+            'addon_cam': None,
+            'user': user,
+        }
+        request.app['state']['wds'][wdid] = instance_id
+        return web.json_response({
+            'success': True,
+            'id': instance_id,
+            'sshkey': 'DEADBEEF',
+        })
+    return web.json_response({'error': 'All matching workspace deployments are busy'},
+                             status=404)
+
+
+async def get_instance_info(request):
+    """GET /instance/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    inid = request.match_info['inid']
+    if request.app['state']['instances'][inid]['status'] == 'INIT':
+        if time.monotonic() - request.app['state']['instances'][inid]['tdiff'] > 3:
+            request.app['state']['instances'][inid]['status'] = 'READY'
+    info = {
+        'id': inid,
+        'deployment': request.app['state']['instances'][inid]['wd'],
+        'type': request.app['state']['assumed_wtype'],
+        'region': 'us:cali',
+        'starttime': request.app['state']['instances'][inid]['start_time'],
+        'rootuser': 'root',
+        'status': request.app['state']['instances'][inid]['status'],
+    }
+    if 'end_time' in request.app['state']['instances'][inid]:
+        info['endtime'] = request.app['state']['instances'][inid]['end_time']
+    return web.json_response(info)
+
+
+async def get_firewall_rules(request):
+    """GET /firewall/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    return web.json_response({'rules': []})
+
+
+async def terminate_instance(request):
+    """POST /terminate/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    inid = request.match_info['inid']
+    wdid = request.app['state']['instances'][inid]['wd']
+    request.app['state']['wds'][wdid] = None
+    request.app['state']['instances'][inid]['end_time'] = str(datetime.utcnow())
+    request.app['state']['instances'][inid]['status'] = 'TERMINATED'
+    return web.Response()
+
+
+async def revoke_token(request):
+    """POST /revoke/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    return web.Response()
+
+
+async def purge_tokens(request):
+    """POST /purge
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    return web.Response()
+
+
+async def unknown(request):
+    """Return 404 Not Found, and print details
+    """
+    await print_details(request)
+    return web.json_response(status=404)
+
+
+async def get_acl(request):
+    """GET /rules
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    return web.json_response({
+        'rules': [],
+    })
+
+
+async def status_addon_mistyproxy(request):
+    """GET /addon/mistyproxy/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_mistyproxy'] is None:
+        return web.json_response({'error_message': 'add-on `mistyproxy` not active on this instance'},
+                                 status=404)
+    if time.monotonic() - request.app['state']['instances'][instance_id]['addon_mistyproxy']['tdiff'] > 3:
+        request.app['state']['instances'][instance_id]['addon_mistyproxy']['status'] = 'active'
+    return web.json_response(request.app['state']['instances'][instance_id]['addon_mistyproxy'])
+
+
+async def apply_addon_mistyproxy(request):
+    """POST /addon/mistyproxy/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_mistyproxy'] is not None:
+        return web.json_response({'error_message': 'add-on `mistyproxy` already applied to instance {}'.format(instance_id)},
+                                 status=503)
+    ihash = hashlib.sha256(bytes(instance_id, encoding='utf-8')).hexdigest()
+    ptoken = hashlib.sha256(bytes(random.randint(0, 255))).hexdigest()
+    fwdport = 7777
+    request.app['state']['instances'][instance_id]['addon_mistyproxy'] = {
+        'status': 'starting',
+        'url': [
+            'proxy.rerobots.net:{PORT}/{TOKEN}'.format(PORT=fwdport, TOKEN=ptoken),
+            'https://proxy.rerobots.net/{INSTANCEHASH}/mistyproxy/{TOKEN}'.format(INSTANCEHASH=ihash, TOKEN=ptoken),
+        ],
+        'tdiff': time.monotonic(),
+    }
+    return web.Response(status=200)
+
+
+async def remove_addon_mistyproxy(request):
+    """DELETE /addon/mistyproxy/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_mistyproxy'] is None:
+        return web.json_response({'error_message': 'add-on `mistyproxy` not active on this instance'},
+                                 status=404)
+    request.app['state']['instances'][instance_id]['addon_mistyproxy'] = None
+    return web.Response(status=200)
+
+
+async def status_addon_py(request):
+    """GET /addon/py/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_py'] is None:
+        return web.json_response({'error_message': 'add-on `py` not active on this instance'},
+                                 status=404)
+    if time.monotonic() - request.app['state']['instances'][instance_id]['addon_py']['tdiff'] > 3:
+        request.app['state']['instances'][instance_id]['addon_py']['status'] = 'active'
+    return web.json_response(request.app['state']['instances'][instance_id]['addon_py'])
+
+
+async def apply_addon_py(request):
+    """POST /addon/py/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_py'] is not None:
+        return web.json_response({'error_message': 'add-on `py` already applied to instance {}'.format(instance_id)},
+                                 status=503)
+    ihash = hashlib.sha256(bytes(instance_id, encoding='utf-8')).hexdigest()
+    ptoken = hashlib.sha256(bytes(random.randint(0, 255))).hexdigest()
+    fwdport = 7777
+    request.app['state']['instances'][instance_id]['addon_py'] = {
+        'status': 'starting',
+        'url': 'ws://127.0.0.1:8989/{INSTANCEHASH}/py/{TOKEN}'.format(INSTANCEHASH=ihash, TOKEN=ptoken),
+        'tdiff': time.monotonic(),
+    }
+    return web.Response(status=200)
+
+
+async def remove_addon_py(request):
+    """DELETE /addon/py/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_py'] is None:
+        return web.json_response({'error_message': 'add-on `py` not active on this instance'},
+                                 status=404)
+    request.app['state']['instances'][instance_id]['addon_py'] = None
+    return web.Response(status=200)
+
+
+async def status_addon_cam(request):
+    """GET /addon/cam/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_cam'] is None:
+        return web.json_response({'error_message': 'add-on `cam` not active on this instance'},
+                                 status=404)
+    if time.monotonic() - request.app['state']['instances'][instance_id]['addon_cam']['tdiff'] > 3:
+        request.app['state']['instances'][instance_id]['addon_cam']['status'] = 'active'
+    return web.json_response({
+        'status': request.app['state']['instances'][instance_id]['addon_cam']['status'],
+        'remote_user': request.app['state']['instances'][instance_id]['addon_cam']['user'],
+    })
+
+
+async def apply_addon_cam(request):
+    """POST /addon/cam/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_cam'] is not None:
+        return web.Response(status=200)
+    request.app['state']['instances'][instance_id]['addon_cam'] = {
+        'status': 'starting',
+        'user': 'root',
+        'tdiff': time.monotonic(),
+    }
+    return web.Response(status=200)
+
+
+async def remove_addon_cam(request):
+    """DELETE /addon/cam/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_cam'] is None:
+        return web.json_response({'error_message': 'add-on `cam` not active on this instance'},
+                                 status=404)
+    request.app['state']['instances'][instance_id]['addon_cam'] = None
+    return web.Response(status=200)
+
+
+async def addon_cam_snapshot(request):
+    """GET /addon/cam/<id>/<cid>/img
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_cam'] is None:
+        return web.json_response({'error_message': 'add-on `cam` not active on this instance'},
+                                 status=404)
+    payload = {
+        'success': True,
+        'format': 'JPEG',
+        'coding': 'base64',
+        'data': request.app['state']['example_data']['webcam'],
+    }
+    return web.json_response(payload)
+
+
+async def addon_cam_sender_job(send, webcam_img=None):
+    """Image send worker for `GET /addon/cam/<id>/<cid>/feed/<tok>`
+    """
+    if webcam_img is None:
+        webcam_img = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQIAJQAlAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/wAALCAAwAEABAREA/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAA/AK1AAAAAAAAAAAAAAAB//9k='
+    try:
+        while True:
+            await asyncio.sleep(0.033)
+            await send(webcam_img)
+    except asyncio.CancelledError:
+        pass
+
+
+async def addon_cam_stream(request):
+    """GET /addon/cam/<id>/<cid>/feed/<tok>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_cam'] is None:
+        return web.json_response({'error_message': 'add-on `cam` not active on this instance'},
+                                 status=404)
+    wsock = web.WebSocketResponse(autoping=True, heartbeat=5.0)
+    await wsock.prepare(request)
+    sender_task = request.app.loop.create_task(addon_cam_sender_job(wsock.send_str, webcam_img=request.app['state']['example_data']['webcam']))
+    async for msg in wsock:
+        if msg.type == aiohttp.WSMsgType.CLOSED or msg.type == aiohttp.WSMsgType.ERROR:
+            break
+    sender_task.cancel()
+    return wsock
+
+
+if __name__ == '__main__':
+    web.run_app(create_rmock(), host='127.0.0.1', port=8666)
