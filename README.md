@@ -4,6 +4,8 @@ Introduction
 Summary
 -------
 
+WARNING: This mock does not yet comprehensively implement the rerobots API.
+
 This server mocks the rerobots API, using an internal finite-state machine to
 simulate actions like requesting an instance, applying an add-on, etc. There are
 parameters to configure the initial state and time behavior.
