@@ -31,8 +31,15 @@ or configure the [rerobots Python client](https://github.com/rerobots/py) to use
     ['null']
 
 
-Building and testing
---------------------
+Prerequisites
+-------------
+
+The following Python packages are required:
+
+* [PyJWT](https://pypi.org/project/PyJWT/)
+* [aiohttp](https://pypi.org/project/aiohttp/)
+
+Python >= 3.5.3 (because of aiohttp)
 
 A [Git LFS](https://git-lfs.github.com/) client is required to clone this
 repository. Note that `git clone` will succeed without `git lfs` available, but
