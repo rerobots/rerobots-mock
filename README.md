@@ -39,7 +39,12 @@ The following Python packages are required:
 * [PyJWT](https://pypi.org/project/PyJWT/)
 * [aiohttp](https://pypi.org/project/aiohttp/)
 
-Python >= 3.5.3 (because of aiohttp)
+To install these with known working versions,
+
+    pip install -r requirements.txt
+
+Note that Python version at least 3.5.3 is required (inherited requirement of
+aiohttp).
 
 A [Git LFS](https://git-lfs.github.com/) client is required to clone this
 repository. Note that `git clone` will succeed without `git lfs` available, but
