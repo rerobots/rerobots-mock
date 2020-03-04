@@ -97,7 +97,7 @@ def create_rmock(argv=None):
         'instances': dict(),
         'wds': {wdid: None for wdid in wdeployment_ids},
         'example_data': {
-            'webcam': open(os.path.join('data', 'webcam.txt'), 'rt').read().strip(),
+            'webcam': open(os.path.join('data', 'webcam.base64'), 'rt').read().strip(),
         },
     }
 
