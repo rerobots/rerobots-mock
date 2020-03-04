@@ -70,10 +70,12 @@ def create_rmock(argv=None):
                            action='store_true', default=False,
                            help='show text body of requests')
     argparser.add_argument('-n', dest='number_of_wds', metavar='N', type=int, default=1,
-                           help='the number of workspace deployments; default is 1, if N is not given.')
+                           help=('the number of workspace deployments; '
+                                 'default is 1, if N is not given.'))
     argparser.add_argument('-t', dest='assumed_wtype', metavar='TYPE', type=str, default='null',
                            help='workspace type; default is `null`')
-    argparser.add_argument('--wdid', dest='fixed_wdeployment_id', metavar='ID', type=str, default=None,
+    argparser.add_argument('--wdid', dest='fixed_wdeployment_id', metavar='ID', type=str,
+                           default=None,
                            help=('workspace deployment id; if more than 1, comma-separated; '
                                  'default is to randomly generate as needed'))
     args = argparser.parse_args(argv)
@@ -101,12 +103,16 @@ def create_rmock(argv=None):
         },
     }
 
+    inid_re = r'{inid:[a-zA-Z\d_\-0-9\=]+}'
+    tok_re = r'{tok:[a-zA-Z_\-0-9\=]+}'
     app.router.add_get(r'/workspaces', list_workspaces, allow_head=False)
     app.router.add_get(r'/instances', list_instances, allow_head=False)
-    app.router.add_get(r'/instances/{wt:[a-zA-Z\d_\-]+}', list_instances, allow_head=False)
-    app.router.add_get(r'/instance/{inid:[a-zA-Z\d_\-0-9\=]+}', get_instance_info, allow_head=False)
-    app.router.add_get(r'/firewall/{inid:[a-zA-Z\d_\-0-9\=]+}', get_firewall_rules, allow_head=False)
-    app.router.add_post(r'/terminate/{inid:[a-zA-Z\d_\-0-9\=]+}', terminate_instance)
+    app.router.add_get(r'/instances/{wt:[a-zA-Z\d_\-]+}', list_instances,
+                       allow_head=False)
+    app.router.add_get(r'/instance/' + inid_re, get_instance_info, allow_head=False)
+    app.router.add_get(r'/firewall/' + inid_re, get_firewall_rules,
+                       allow_head=False)
+    app.router.add_post(r'/terminate/' + inid_re, terminate_instance)
     app.router.add_get(r'/reservations', list_reservations, allow_head=False)
     app.router.add_get(r'/deployments', list_wdeployments, allow_head=False)
     app.router.add_get(r'/deployments/{wt:[a-zA-Z\d_\-]+}', list_wdeployments, allow_head=False)
@@ -116,19 +122,22 @@ def create_rmock(argv=None):
     app.router.add_post(r'/revoke/{sha256:[a-fA-F0-9]{64}}', revoke_token)
     app.router.add_post(r'/purge', purge_tokens)
 
-    app.router.add_get(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}', status_addon_cam, allow_head=False)
-    app.router.add_post(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}', apply_addon_cam)
-    app.router.add_delete(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}', remove_addon_cam)
-    app.router.add_get(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}/{cameraid:[0-9]+}/img', addon_cam_snapshot, allow_head=False)
-    app.router.add_get(r'/addon/cam/{inid:[a-zA-Z\d_\-0-9\=]+}/{cameraid:[0-9]+}/feed/{tok:[a-zA-Z_\-0-9\=]+}', addon_cam_stream, allow_head=False)
+    app.router.add_get(r'/addon/cam/' + inid_re, status_addon_cam, allow_head=False)
+    app.router.add_post(r'/addon/cam/' + inid_re, apply_addon_cam)
+    app.router.add_delete(r'/addon/cam/' + inid_re, remove_addon_cam)
+    app.router.add_get(r'/addon/cam/' + inid_re + r'/{cameraid:[0-9]+}/img',
+                       addon_cam_snapshot,
+                       allow_head=False)
+    app.router.add_get(r'/addon/cam/' + inid_re + r'/{cameraid:[0-9]+}/feed/' + tok_re,
+                       addon_cam_stream,
+                       allow_head=False)
+    app.router.add_get(r'/addon/mistyproxy/' + inid_re, status_addon_mistyproxy, allow_head=False)
+    app.router.add_post(r'/addon/mistyproxy/' + inid_re, apply_addon_mistyproxy)
+    app.router.add_delete(r'/addon/mistyproxy/' + inid_re, remove_addon_mistyproxy)
 
-    app.router.add_get(r'/addon/mistyproxy/{inid:[a-zA-Z\d_\-0-9\=]+}', status_addon_mistyproxy, allow_head=False)
-    app.router.add_post(r'/addon/mistyproxy/{inid:[a-zA-Z\d_\-0-9\=]+}', apply_addon_mistyproxy)
-    app.router.add_delete(r'/addon/mistyproxy/{inid:[a-zA-Z\d_\-0-9\=]+}', remove_addon_mistyproxy)
-
-    app.router.add_get(r'/addon/py/{inid:[a-zA-Z\d_\-0-9\=]+}', status_addon_py, allow_head=False)
-    app.router.add_post(r'/addon/py/{inid:[a-zA-Z\d_\-0-9\=]+}', apply_addon_py)
-    app.router.add_delete(r'/addon/py/{inid:[a-zA-Z\d_\-0-9\=]+}', remove_addon_py)
+    app.router.add_get(r'/addon/py/' + inid_re, status_addon_py, allow_head=False)
+    app.router.add_post(r'/addon/py/' + inid_re, apply_addon_py)
+    app.router.add_delete(r'/addon/py/' + inid_re, remove_addon_py)
 
     app.router.add_options(r'/{route:.+}', show_options)
 
@@ -244,9 +253,11 @@ async def list_wdeployments(request):
     else:
         types = []
     try:
-        max_per_page = extract_query_int(request.query, 'max_per_page', minv=0, default=0, clip=True)
+        max_per_page = extract_query_int(request.query, 'max_per_page', minv=0, default=0,
+                                         clip=True)
     except ValueError:
-        return web.json_response({'error_message': 'error parsing given value of max_per_page'}, status=400)
+        return web.json_response({'error_message': 'error parsing given value of max_per_page'},
+                                 status=400)
     try:
         page = extract_query_int(request.query, 'page', minv=1, default=1, clip=True)
     except ValueError:
@@ -257,11 +268,13 @@ async def list_wdeployments(request):
         try:
             maxlen = extract_query_int(request.query, 'maxlen', minv=0, clip=True)
         except ValueError:
-            return web.json_response({'error_message': 'error parsing given value of maxlen'}, status=400)
+            return web.json_response({'error_message': 'error parsing given value of maxlen'},
+                                     status=400)
 
     matches = []
-    if 'q' not in request.query or request.app['state']['assumed_wtype'].find(request.query['q']) >= 0:
-        if len(types) == 0 or request.app['state']['assumed_wtype'] in types:
+    assumed_wtype = request.app['state']['assumed_wtype']
+    if 'q' not in request.query or assumed_wtype.find(request.query['q']) >= 0:
+        if len(types) == 0 or assumed_wtype in types:
             for wdeployment in request.app['state']['wds'].keys():
                 if maxlen == 'u' or request.app['state']['wds'][wdeployment] is None or maxlen >= 1:
                     matches.append(wdeployment)
@@ -434,9 +447,11 @@ async def status_addon_mistyproxy(request):
                                  status=404)
     instance_id = request.match_info['inid']
     if request.app['state']['instances'][instance_id]['addon_mistyproxy'] is None:
-        return web.json_response({'error_message': 'add-on `mistyproxy` not active on this instance'},
-                                 status=404)
-    if time.monotonic() - request.app['state']['instances'][instance_id]['addon_mistyproxy']['tdiff'] > 3:
+        return web.json_response({
+            'error_message': 'add-on `mistyproxy` not active on this instance'
+        }, status=404)
+    tdiff = request.app['state']['instances'][instance_id]['addon_mistyproxy']['tdiff']
+    if time.monotonic() - tdiff > 3:
         request.app['state']['instances'][instance_id]['addon_mistyproxy']['status'] = 'active'
     return web.json_response(request.app['state']['instances'][instance_id]['addon_mistyproxy'])
 
@@ -451,16 +466,21 @@ async def apply_addon_mistyproxy(request):
                                  status=404)
     instance_id = request.match_info['inid']
     if request.app['state']['instances'][instance_id]['addon_mistyproxy'] is not None:
-        return web.json_response({'error_message': 'add-on `mistyproxy` already applied to instance {}'.format(instance_id)},
-                                 status=503)
+        return web.json_response({
+            'error_message': 'add-on `mistyproxy` already applied to instance ' + instance_id,
+        }, status=503)
     ihash = hashlib.sha256(bytes(instance_id, encoding='utf-8')).hexdigest()
     ptoken = hashlib.sha256(bytes(random.randint(0, 255))).hexdigest()
     fwdport = 7777
+    https_url = 'https://proxy.rerobots.net/{INSTANCEHASH}/mistyproxy/{TOKEN}'.format(
+        INSTANCEHASH=ihash,
+        TOKEN=ptoken
+    )
     request.app['state']['instances'][instance_id]['addon_mistyproxy'] = {
         'status': 'starting',
         'url': [
             'proxy.rerobots.net:{PORT}/{TOKEN}'.format(PORT=fwdport, TOKEN=ptoken),
-            'https://proxy.rerobots.net/{INSTANCEHASH}/mistyproxy/{TOKEN}'.format(INSTANCEHASH=ihash, TOKEN=ptoken),
+            https_url,
         ],
         'tdiff': time.monotonic(),
     }
@@ -477,8 +497,9 @@ async def remove_addon_mistyproxy(request):
                                  status=404)
     instance_id = request.match_info['inid']
     if request.app['state']['instances'][instance_id]['addon_mistyproxy'] is None:
-        return web.json_response({'error_message': 'add-on `mistyproxy` not active on this instance'},
-                                 status=404)
+        return web.json_response({
+            'error_message': 'add-on `mistyproxy` not active on this instance'
+        }, status=404)
     request.app['state']['instances'][instance_id]['addon_mistyproxy'] = None
     return web.Response(status=200)
 
@@ -510,13 +531,18 @@ async def apply_addon_py(request):
                                  status=404)
     instance_id = request.match_info['inid']
     if request.app['state']['instances'][instance_id]['addon_py'] is not None:
-        return web.json_response({'error_message': 'add-on `py` already applied to instance {}'.format(instance_id)},
-                                 status=503)
+        return web.json_response({
+            'error_message': 'add-on `py` already applied to instance {}'.format(instance_id)
+        }, status=503)
     ihash = hashlib.sha256(bytes(instance_id, encoding='utf-8')).hexdigest()
     ptoken = hashlib.sha256(bytes(random.randint(0, 255))).hexdigest()
+    websocket_url = 'ws://127.0.0.1:8989/{INSTANCEHASH}/py/{TOKEN}'.format(
+        INSTANCEHASH=ihash,
+        TOKEN=ptoken
+    )
     request.app['state']['instances'][instance_id]['addon_py'] = {
         'status': 'starting',
-        'url': 'ws://127.0.0.1:8989/{INSTANCEHASH}/py/{TOKEN}'.format(INSTANCEHASH=ihash, TOKEN=ptoken),
+        'url': websocket_url,
         'tdiff': time.monotonic(),
     }
     return web.Response(status=200)
@@ -618,7 +644,7 @@ async def addon_cam_sender_job(send, webcam_img=None):
     """Image send worker for `GET /addon/cam/<id>/<cid>/feed/<tok>`
     """
     if webcam_img is None:
-        webcam_img = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQIAJQAlAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/wAALCAAwAEABAREA/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAA/AK1AAAAAAAAAAAAAAAB//9k='
+        webcam_img = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQIAJQAlAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/wAALCAAwAEABAREA/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAA/AK1AAAAAAAAAAAAAAAB//9k='  # pylint: disable=line-too-long
     try:
         while True:
             await asyncio.sleep(0.033)
@@ -641,7 +667,10 @@ async def addon_cam_stream(request):
                                  status=404)
     wsock = web.WebSocketResponse(autoping=True, heartbeat=5.0)
     await wsock.prepare(request)
-    sender_task = request.app.loop.create_task(addon_cam_sender_job(wsock.send_str, webcam_img=request.app['state']['example_data']['webcam']))
+    sender_task = request.app.loop.create_task(
+        addon_cam_sender_job(wsock.send_str,
+                             webcam_img=request.app['state']['example_data']['webcam'])
+    )
     async for msg in wsock:
         if msg.type == aiohttp.WSMsgType.CLOSED or msg.type == aiohttp.WSMsgType.ERROR:
             break
