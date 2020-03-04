@@ -11,6 +11,26 @@ simulate actions like requesting an instance, applying an add-on, etc. There are
 parameters to configure the initial state and time behavior.
 
 
+Getting started
+---------------
+
+To begin,
+
+    ./rmock
+
+which will bind to your localhost at port 8666. Interact with it as you would
+with the production rerobots API; e.g., get a list of workspace types using `cURL`
+
+    curl http://127.0.0.1:8666/workspaces
+
+or configure the [rerobots Python client](https://github.com/rerobots/py) to use it
+
+    >>> from rerobots.api import APIClient
+    >>> apic = APIClient(base_uri='http://127.0.0.1:8666')
+    >>> apic.get_wtypes()
+    ['null']
+
+
 Building and testing
 --------------------
 
