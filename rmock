@@ -514,7 +514,6 @@ async def apply_addon_py(request):
                                  status=503)
     ihash = hashlib.sha256(bytes(instance_id, encoding='utf-8')).hexdigest()
     ptoken = hashlib.sha256(bytes(random.randint(0, 255))).hexdigest()
-    fwdport = 7777
     request.app['state']['instances'][instance_id]['addon_py'] = {
         'status': 'starting',
         'url': 'ws://127.0.0.1:8989/{INSTANCEHASH}/py/{TOKEN}'.format(INSTANCEHASH=ihash, TOKEN=ptoken),
