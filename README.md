@@ -49,7 +49,7 @@ some large files will not be fetched.
 Testing
 -------
 
-`pylint rmock`
+    pylint rmock
 
 
 Participating
