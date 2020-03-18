@@ -78,6 +78,9 @@ def create_rmock(argv=None):
                            default=None,
                            help=('workspace deployment id; if more than 1, comma-separated; '
                                  'default is to randomly generate as needed'))
+    argparser.add_argument('--addon-py-url', dest='addon_py_url', metavar='URL', type=str,
+                           default=None,
+                           help='WebSocket URL for add-on `py`; default is random')
     args = argparser.parse_args(argv)
     if args.number_of_wds <= 0:
         print('number of workspace deployments must be positive integer.')
@@ -94,6 +97,9 @@ def create_rmock(argv=None):
     app['show_headers'] = args.show_headers
     app['show_text'] = args.show_text
     app['verbose'] = args.verbose
+    app['addon_py'] = {
+        'url': args.addon_py_url,
+    }
     app['state'] = {
         'assumed_wtype': args.assumed_wtype,
         'instances': dict(),
@@ -534,12 +540,15 @@ async def apply_addon_py(request):
         return web.json_response({
             'error_message': 'add-on `py` already applied to instance {}'.format(instance_id)
         }, status=503)
-    ihash = hashlib.sha256(bytes(instance_id, encoding='utf-8')).hexdigest()
-    ptoken = hashlib.sha256(bytes(random.randint(0, 255))).hexdigest()
-    websocket_url = 'ws://127.0.0.1:8989/{INSTANCEHASH}/py/{TOKEN}'.format(
-        INSTANCEHASH=ihash,
-        TOKEN=ptoken
-    )
+    if request.app['addon_py']['url'] is None:
+        ihash = hashlib.sha256(bytes(instance_id, encoding='utf-8')).hexdigest()
+        ptoken = hashlib.sha256(bytes(random.randint(0, 255))).hexdigest()
+        websocket_url = 'ws://127.0.0.1:8989/{INSTANCEHASH}/py/{TOKEN}'.format(
+            INSTANCEHASH=ihash,
+            TOKEN=ptoken
+        )
+    else:
+        websocket_url = request.app['addon_py']['url']
     request.app['state']['instances'][instance_id]['addon_py'] = {
         'status': 'starting',
         'url': websocket_url,
