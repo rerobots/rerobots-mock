@@ -18,6 +18,11 @@ import time
 import uuid
 from datetime import datetime
 
+try:
+    from asyncio import get_running_loop
+except ImportError:
+    from asyncio import get_event_loop as get_running_loop
+
 import aiohttp
 from aiohttp import web
 
@@ -676,7 +681,8 @@ async def addon_cam_stream(request):
                                  status=404)
     wsock = web.WebSocketResponse(autoping=True, heartbeat=5.0)
     await wsock.prepare(request)
-    sender_task = request.app.loop.create_task(
+    loop = get_running_loop()
+    sender_task = loop.create_task(
         addon_cam_sender_job(wsock.send_str,
                              webcam_img=request.app['state']['example_data']['webcam'])
     )
