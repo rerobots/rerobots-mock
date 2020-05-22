@@ -201,6 +201,7 @@ async def list_instances(request):
     else:
         constrained_wtype = False
     instances = []
+    wds = []
     for (inid, info) in request.app['state']['instances'].items():
         if user and info['user'] != user:
             continue
@@ -208,8 +209,10 @@ async def list_instances(request):
             continue
         if not constrained_wtype or request.app['state']['assumed_wtype'] == constrained_wtype:
             instances.append(inid)
+            wds.append(info['wd'])
     return web.json_response({
         'workspace_instances': instances,
+        'workspace_deployments': wds,
         'page_count': 1
     })
 
