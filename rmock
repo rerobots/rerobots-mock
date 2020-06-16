@@ -150,6 +150,10 @@ def create_rmock(argv=None):
     app.router.add_post(r'/addon/py/' + inid_re, apply_addon_py)
     app.router.add_delete(r'/addon/py/' + inid_re, remove_addon_py)
 
+    app.router.add_get(r'/addon/cmd/' + inid_re, status_addon_cmd, allow_head=False)
+    app.router.add_post(r'/addon/cmd/' + inid_re, apply_addon_cmd)
+    app.router.add_delete(r'/addon/cmd/' + inid_re, remove_addon_cmd)
+
     app.router.add_options(r'/{route:.+}', show_options)
 
     app.router.add_route('*', r'/{route:.+}', unknown)
@@ -353,6 +357,7 @@ async def launch_instance(request):
             'addon_mistyproxy': None,
             'addon_py': None,
             'addon_cam': None,
+            'addon_cmd': None,
             'user': user,
         }
         request.app['state']['wds'][wdid] = instance_id
@@ -578,6 +583,59 @@ async def remove_addon_py(request):
         return web.json_response({'error_message': 'add-on `py` not active on this instance'},
                                  status=404)
     request.app['state']['instances'][instance_id]['addon_py'] = None
+    return web.Response(status=200)
+
+
+async def status_addon_cmd(request):
+    """GET /addon/cmd/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_cmd'] is None:
+        return web.json_response({'error_message': 'add-on `cmd` not active on this instance'},
+                                 status=404)
+    if time.monotonic() - request.app['state']['instances'][instance_id]['addon_cmd']['tdiff'] > 3:
+        request.app['state']['instances'][instance_id]['addon_cmd']['status'] = 'active'
+    return web.json_response(request.app['state']['instances'][instance_id]['addon_cmd'])
+
+
+async def apply_addon_cmd(request):
+    """POST /addon/cmd/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_cmd'] is not None:
+        return web.json_response({
+            'error_message': 'add-on `cmd` already applied to instance {}'.format(instance_id)
+        }, status=503)
+    request.app['state']['instances'][instance_id]['addon_cmd'] = {
+        'status': 'starting',
+        'tdiff': time.monotonic(),
+    }
+    return web.Response(status=200)
+
+
+async def remove_addon_cmd(request):
+    """DELETE /addon/cmd/<id>
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    instance_id = request.match_info['inid']
+    if request.app['state']['instances'][instance_id]['addon_cmd'] is None:
+        return web.json_response({'error_message': 'add-on `cmd` not active on this instance'},
+                                 status=404)
+    request.app['state']['instances'][instance_id]['addon_cmd'] = None
     return web.Response(status=200)
 
 
