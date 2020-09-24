@@ -51,7 +51,7 @@ def get_user(headers):
     return None
 
 
-def create_rmock(argv=None):
+def create_rmock(argv=None):  # pylint: disable=too-many-statements
     """Parse CLI args, and return Web app.
     """
     if argv is None:
@@ -129,6 +129,8 @@ def create_rmock(argv=None):
     app.router.add_get(r'/deployments/{wt:[a-zA-Z\d_\-]+}', list_wdeployments, allow_head=False)
     app.router.add_post(r'/new/{wdid:[a-zA-Z\d_\-0-9\=]+}', launch_instance)
     app.router.add_get(r'/deployment/{wdid:[a-zA-Z\d_\-0-9\=]+}', get_wdinfo, allow_head=False)
+    app.router.add_get(r'/deployment/{wdid:[a-zA-Z\d_\-0-9\=]+}/rules', get_wdrules,
+                       allow_head=False)
     app.router.add_get(r'/rules', get_acl, allow_head=False)
     app.router.add_post(r'/revoke/{sha256:[a-fA-F0-9]{64}}', revoke_token)
     app.router.add_post(r'/purge', purge_tokens)
@@ -333,6 +335,18 @@ async def get_wdinfo(request):
         'created': '2019-06-25 07:21:48.223695',
         'queuelen': 0 if request.app['state']['wds'][wdid] is None else 1,
     })
+
+
+async def get_wdrules(request):
+    """GET /deployment/<id>/rules
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    wdid = request.match_info['wdid']
+    if wdid not in request.app['state']['wds']:
+        return web.json_response({'error_message': 'no workspace deployment found with given ID'},
+                                 status=404)
+    return web.json_response({'rules': []})
 
 
 async def launch_instance(request):
