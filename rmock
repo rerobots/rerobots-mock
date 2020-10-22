@@ -156,6 +156,8 @@ def create_rmock(argv=None):  # pylint: disable=too-many-statements
     app.router.add_post(r'/addon/cmd/' + inid_re, apply_addon_cmd)
     app.router.add_delete(r'/addon/cmd/' + inid_re, remove_addon_cmd)
 
+    app.router.add_get(r'/hardshare/list', list_hardshare_dev, allow_head=False)
+
     app.router.add_options(r'/{route:.+}', show_options)
 
     app.router.add_route('*', r'/{route:.+}', unknown)
@@ -766,6 +768,18 @@ async def addon_cam_stream(request):
             break
     sender_task.cancel()
     return wsock
+
+
+async def list_hardshare_dev(request):
+    """GET /hardshare/list
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    await asyncio.sleep(1)
+    return web.json_response({
+        'wdeployments': ['04ac432d-18e5-4ade-9383-1987ebbb9fbe'],
+        'attr': {'04ac432d-18e5-4ade-9383-1987ebbb9fbe': {'desc': 'mock robot'}},
+    })
 
 
 if __name__ == '__main__':
