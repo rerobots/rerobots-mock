@@ -311,8 +311,22 @@ async def list_wdeployments(request):
     if max_per_page > 0:
         matches = matches[(page-1)*max_per_page:page*max_per_page]
 
+    info = dict()
+    for match in matches:
+        info[match] = {
+            'type': request.app['state']['assumed_wtype'],
+            'type_version': 1,
+            'supported_addons': ['cam', 'mistyproxy', 'py'],
+            'desc': '',
+            'region': 'us:cali',
+            'icounter': 1,
+            'created': '2019-06-25 07:21:48.223695',
+            'queuelen': 0 if request.app['state']['wds'][match] is None else 1,
+        }
+
     return web.json_response({
         'workspace_deployments': matches,
+        'info': info,
         'page_count': page_count,
     })
 
