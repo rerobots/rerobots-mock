@@ -295,11 +295,11 @@ async def list_wdeployments(request):
 
     matches = []
     assumed_wtype = request.app['state']['assumed_wtype']
-    if 'q' not in request.query or assumed_wtype.find(request.query['q']) >= 0:
-        if len(types) == 0 or assumed_wtype in types:
-            for wdeployment in request.app['state']['wds'].keys():
-                if maxlen == 'u' or request.app['state']['wds'][wdeployment] is None or maxlen >= 1:
-                    matches.append(wdeployment)
+    if ('q' not in request.query or assumed_wtype.find(request.query['q']) >= 0) and \
+       (len(types) == 0 or assumed_wtype in types):
+        for wdeployment in request.app['state']['wds'].keys():
+            if maxlen == 'u' or request.app['state']['wds'][wdeployment] is None or maxlen >= 1:
+                matches.append(wdeployment)
 
     if max_per_page == 0:
         page_count = 1
