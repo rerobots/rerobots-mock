@@ -121,6 +121,7 @@ def create_rmock(argv=None):  # pylint: disable=too-many-statements
     app.router.add_get(r'/instances/{wt:[a-zA-Z\d_\-]+}', list_instances,
                        allow_head=False)
     app.router.add_get(r'/instance/' + inid_re, get_instance_info, allow_head=False)
+    app.router.add_get(r'/instance/' + inid_re + '/sshkey', get_sshkey, allow_head=False)
     app.router.add_get(r'/firewall/' + inid_re, get_firewall_rules,
                        allow_head=False)
     app.router.add_post(r'/terminate/' + inid_re, terminate_instance)
@@ -423,6 +424,22 @@ async def get_instance_info(request):
     if 'end_time' in request.app['state']['instances'][inid]:
         info['endtime'] = request.app['state']['instances'][inid]['end_time']
     return web.json_response(info)
+
+
+async def get_sshkey(request):
+    """GET /instance/<id>/sshkey
+    """
+    if request.app['verbose']:
+        await print_details(request)
+    if request.match_info['inid'] not in request.app['state']['instances']:
+        return web.json_response({'error_message': 'instance not found'},
+                                 status=404)
+    inid = request.match_info['inid']
+    if request.app['state']['instances'][inid]['status'] == 'READY':
+        return web.json_response({'key': 'DEADBEEF'})
+    else:
+        return web.json_response({'error_message': 'no secret SSH key available'},
+                                 status=404)
 
 
 async def get_firewall_rules(request):
