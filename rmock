@@ -394,7 +394,6 @@ async def launch_instance(request):
         return web.json_response({
             'success': True,
             'id': instance_id,
-            'sshkey': 'DEADBEEF',
         })
     return web.json_response({'error': 'All matching workspace deployments are busy'},
                              status=404)
