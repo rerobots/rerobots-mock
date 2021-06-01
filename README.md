@@ -58,7 +58,7 @@ Testing
 
     pylint rmock
 
-Recent CI testing results are available at https://travis-ci.org/rerobots/rerobots-mock
+Recent CI testing results are available at https://travis-ci.com/rerobots/rerobots-mock
 
 
 Participating
