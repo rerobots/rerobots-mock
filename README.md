@@ -10,7 +10,7 @@ This server mocks the rerobots API, using an internal finite-state machine to
 simulate actions like requesting an instance, applying an add-on, etc. There are
 parameters to configure the initial state and time behavior.
 
-To read more about the rerobots HTTP API, begin at https://help.rerobots.net/api.html
+To read more about the rerobots HTTP API, begin at https://docs.rerobots.net/api
 
 
 Getting started
